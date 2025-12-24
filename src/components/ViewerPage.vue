@@ -2,8 +2,21 @@
     <q-page class="row items-stretch root">
         <div class="col relative-position">
             <slot></slot>
-            <DxfViewer ref="viewer" :dxfUrl="dxfUrl" :fonts="fonts"
-                       @dxf-loaded="_OnLoaded" @dxf-cleared="_OnCleared" @dxf-message="_OnMessage" />
+            <SelectorToolbar
+                :activeTool="activeTool"
+                @tool-selected="_OnToolSelected" />
+            <DimensionDisplay
+                :selection="selectedEntity"
+                @close="selectedEntity = null" />
+            <DxfViewer
+                ref="viewer"
+                :dxfUrl="dxfUrl"
+                :fonts="fonts"
+                :activeTool="activeTool"
+                @dxf-loaded="_OnLoaded"
+                @dxf-cleared="_OnCleared"
+                @dxf-message="_OnMessage"
+                @entity-selected="_OnEntitySelected" />
         </div>
         <div class="col-auto layersCol">
             <LayersList :layers="layers" @toggleLayer="_OnToggleLayer" @toggleAll="_OnToggleAll"/>
@@ -20,10 +33,12 @@ import aux1Font from "@/assets/fonts/NotoSansDisplay-SemiCondensedLightItalic.tt
 import aux2Font from "@/assets/fonts/HanaMinA.ttf"
 import aux3Font from "@/assets/fonts/NanumGothic-Regular.ttf"
 import LayersList from "@/components/LayersList"
+import SelectorToolbar from "@/components/SelectorToolbar"
+import DimensionDisplay from "@/components/DimensionDisplay"
 
 export default {
     name: "ViewerPage",
-    components: {LayersList, DxfViewer},
+    components: {LayersList, DxfViewer, SelectorToolbar, DimensionDisplay},
 
     props: {
         dxfUrl: {
@@ -33,7 +48,9 @@ export default {
 
     data() {
         return {
-            layers: null
+            layers: null,
+            activeTool: 'select',
+            selectedEntity: null
         }
     },
 
@@ -74,6 +91,17 @@ export default {
                 break
             }
             this.$q.notify({ type, message: e.detail.message })
+        },
+
+        _OnToolSelected(tool) {
+            this.activeTool = tool
+            if (tool === 'select') {
+                this.selectedEntity = null
+            }
+        },
+
+        _OnEntitySelected(entity) {
+            this.selectedEntity = entity
         }
     },
 

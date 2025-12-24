@@ -1,5 +1,5 @@
 <template>
-<div class="canvasContainer" ref="canvasContainer">
+<div class="canvasContainer" ref="canvasContainer" @click="onCanvasClick">
     <q-inner-loading :showing="isLoading" color="primary" style="z-index: 10"/>
     <div v-if="progress !== null" class="progress">
         <q-linear-progress color="primary" :indeterminate="progress < 0" :value="progress" />
@@ -24,10 +24,6 @@ export default {
         dxfUrl: {
             default: null
         },
-        /** List of font URLs. Files should have TTF format. Fonts are used in the specified order,
-         * each one is checked until necessary glyph is found. Text is not rendered if fonts are not
-         * specified.
-         */
         fonts: {
             default: null
         },
@@ -42,6 +38,10 @@ export default {
                     }
                 }
             }
+        },
+        activeTool: {
+            type: String,
+            default: 'select'
         }
     },
 
@@ -51,7 +51,9 @@ export default {
             progress: null,
             progressText: null,
             curProgressPhase: null,
-            error: null
+            error: null,
+            raycaster: null,
+            selectedObject: null
         }
     },
 
@@ -118,6 +120,143 @@ export default {
             } else {
                 this.progress = size / totalSize
             }
+        },
+
+        onCanvasClick(event) {
+            if (this.activeTool === 'select' || !this.dxfViewer) return
+
+            const rect = this.$refs.canvasContainer.getBoundingClientRect()
+            const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+            const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+
+            if (!this.raycaster) {
+                this.raycaster = new three.Raycaster()
+                this.raycaster.params.Line.threshold = 0.5
+            }
+
+            const camera = this.dxfViewer.GetCamera()
+            const scene = this.dxfViewer.GetScene()
+
+            this.raycaster.setFromCamera(new three.Vector2(x, y), camera)
+            const intersects = this.raycaster.intersectObjects(scene.children, true)
+
+            if (intersects.length > 0) {
+                this.clearSelection()
+                const object = intersects[0].object
+                const dimensions = this.extractDimensions(object, intersects[0])
+
+                if (dimensions && this.matchesTool(dimensions.type)) {
+                    this.highlightObject(object)
+                    this.$emit('entity-selected', dimensions)
+                }
+            } else {
+                this.clearSelection()
+                this.$emit('entity-selected', null)
+            }
+        },
+
+        matchesTool(entityType) {
+            if (this.activeTool === 'line' && entityType === 'line') return true
+            if (this.activeTool === 'hole' && entityType === 'circle') return true
+            if (this.activeTool === 'region' && entityType === 'region') return true
+            return false
+        },
+
+        extractDimensions(object, intersection) {
+            const geometry = object.geometry
+
+            if (geometry.type === 'BufferGeometry' && geometry.attributes.position) {
+                const positions = geometry.attributes.position.array
+
+                if (geometry.index === null && positions.length === 6) {
+                    const start = {
+                        x: positions[0],
+                        y: positions[1],
+                        z: positions[2] || 0
+                    }
+                    const end = {
+                        x: positions[3],
+                        y: positions[4],
+                        z: positions[5] || 0
+                    }
+                    const dx = end.x - start.x
+                    const dy = end.y - start.y
+                    const dz = (end.z || 0) - (start.z || 0)
+                    const length = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+                    return {
+                        type: 'line',
+                        start,
+                        end,
+                        length,
+                        layer: object.userData?.layer || 'Unknown',
+                        color: '#' + (object.material?.color?.getHexString() || '000000')
+                    }
+                }
+
+                const minX = Math.min(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3]))
+                const maxX = Math.max(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3]))
+                const minY = Math.min(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3 + 1]))
+                const maxY = Math.max(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3 + 1]))
+
+                const width = maxX - minX
+                const height = maxY - minY
+                const centerX = (minX + maxX) / 2
+                const centerY = (minY + maxY) / 2
+
+                if (width > 0 && height > 0 && Math.abs(width - height) < 0.01) {
+                    const radius = width / 2
+                    return {
+                        type: 'circle',
+                        center: { x: centerX, y: centerY },
+                        radius,
+                        diameter: radius * 2,
+                        circumference: 2 * Math.PI * radius,
+                        area: Math.PI * radius * radius,
+                        layer: object.userData?.layer || 'Unknown',
+                        color: '#' + (object.material?.color?.getHexString() || '000000')
+                    }
+                }
+
+                if (width > 0 && height > 0) {
+                    return {
+                        type: 'region',
+                        width,
+                        height,
+                        area: width * height,
+                        perimeter: 2 * (width + height),
+                        center: { x: centerX, y: centerY },
+                        layer: object.userData?.layer || 'Unknown',
+                        color: '#' + (object.material?.color?.getHexString() || '000000')
+                    }
+                }
+            }
+
+            return null
+        },
+
+        highlightObject(object) {
+            this.selectedObject = object
+            if (object.material) {
+                object.userData.originalColor = object.material.color.clone()
+                object.material.color.set(0xff6600)
+                if (object.material.linewidth !== undefined) {
+                    object.userData.originalLinewidth = object.material.linewidth
+                    object.material.linewidth = 3
+                }
+            }
+        },
+
+        clearSelection() {
+            if (this.selectedObject && this.selectedObject.material) {
+                if (this.selectedObject.userData.originalColor) {
+                    this.selectedObject.material.color.copy(this.selectedObject.userData.originalColor)
+                }
+                if (this.selectedObject.userData.originalLinewidth !== undefined) {
+                    this.selectedObject.material.linewidth = this.selectedObject.userData.originalLinewidth
+                }
+            }
+            this.selectedObject = null
         }
     },
 
