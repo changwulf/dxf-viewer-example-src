@@ -122,6 +122,34 @@ export default {
             }
         },
 
+        isValidGeometry(object) {
+            if (!object || !object.geometry) return false
+            if (!object.geometry.attributes || !object.geometry.attributes.position) return false
+
+            const positions = object.geometry.attributes.position.array
+            if (!positions || positions.length === 0) return false
+
+            for (let i = 0; i < positions.length; i++) {
+                if (!isFinite(positions[i])) {
+                    return false
+                }
+            }
+
+            return true
+        },
+
+        getValidSceneObjects(scene) {
+            const validObjects = []
+
+            scene.traverse((object) => {
+                if (this.isValidGeometry(object)) {
+                    validObjects.push(object)
+                }
+            })
+
+            return validObjects
+        },
+
         onCanvasClick(event) {
             if (this.activeTool === 'select' || !this.dxfViewer) return
 
@@ -131,25 +159,34 @@ export default {
 
             if (!this.raycaster) {
                 this.raycaster = new three.Raycaster()
-                this.raycaster.params.Line.threshold = 2
-                this.raycaster.params.Points.threshold = 2
+                this.raycaster.params.Line.threshold = 3
+                this.raycaster.params.Points.threshold = 3
             }
 
             const camera = this.dxfViewer.GetCamera()
             const scene = this.dxfViewer.GetScene()
 
+            const validObjects = this.getValidSceneObjects(scene)
+
             this.raycaster.setFromCamera(new three.Vector2(x, y), camera)
-            const intersects = this.raycaster.intersectObjects(scene.children, true)
+
+            let intersects = []
+            try {
+                intersects = this.raycaster.intersectObjects(validObjects, false)
+            } catch (error) {
+                console.warn('Raycaster error:', error)
+                return
+            }
 
             if (intersects.length > 0) {
                 for (const intersect of intersects) {
-                    this.clearSelection()
                     const object = intersect.object
 
                     try {
                         const dimensions = this.extractDimensions(object, intersect)
 
                         if (dimensions && this.matchesTool(dimensions.type)) {
+                            this.clearSelection()
                             this.highlightObject(object)
                             this.$emit('entity-selected', dimensions)
                             return
@@ -158,12 +195,10 @@ export default {
                         console.warn('Error extracting dimensions:', error)
                     }
                 }
-                this.clearSelection()
-                this.$emit('entity-selected', null)
-            } else {
-                this.clearSelection()
-                this.$emit('entity-selected', null)
             }
+
+            this.clearSelection()
+            this.$emit('entity-selected', null)
         },
 
         matchesTool(entityType) {
