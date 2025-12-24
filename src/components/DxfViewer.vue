@@ -1,5 +1,9 @@
 <template>
-<div class="canvasContainer" ref="canvasContainer" @click="onCanvasClick">
+<div class="canvasContainer" ref="canvasContainer"
+     @click="onCanvasClick"
+     @mousedown="onCanvasMouseDown"
+     @mousemove="onCanvasMouseMove"
+     @mouseup="onCanvasMouseUp">
     <q-inner-loading :showing="isLoading" color="primary" style="z-index: 10"/>
     <div v-if="progress !== null" class="progress">
         <q-linear-progress color="primary" :indeterminate="progress < 0" :value="progress" />
@@ -53,7 +57,10 @@ export default {
             curProgressPhase: null,
             error: null,
             raycaster: null,
-            selectedObject: null
+            selectedObject: null,
+            isDragging: false,
+            dragStart: null,
+            dragEnd: null
         }
     },
 
@@ -153,12 +160,15 @@ export default {
 
         onCanvasClick(event) {
             if (this.activeTool === 'select' || !this.dxfViewer) return
+            if (this.activeTool === 'region') return
 
             console.log('=== Click detected with tool:', this.activeTool, '===')
 
             const rect = this.$refs.canvasContainer.getBoundingClientRect()
-            const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-            const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+            const mouse = {
+                x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+                y: -((event.clientY - rect.top) / rect.height) * 2 + 1
+            }
 
             if (!this.raycaster) {
                 this.raycaster = new three.Raycaster()
@@ -167,9 +177,8 @@ export default {
             const camera = this.dxfViewer.GetCamera()
             const scene = this.dxfViewer.GetScene()
 
-            // Calculate threshold based on camera distance
             const cameraDistance = camera.position.length()
-            const threshold = cameraDistance * 0.01
+            const threshold = Math.max(cameraDistance * 0.05, 10)
 
             this.raycaster.params.Line = { threshold }
             this.raycaster.params.Line2 = { threshold }
@@ -180,7 +189,7 @@ export default {
             const validObjects = this.getValidSceneObjects(scene)
             console.log('Valid objects in scene:', validObjects.length)
 
-            this.raycaster.setFromCamera(new three.Vector2(x, y), camera)
+            this.raycaster.setFromCamera(new three.Vector2(mouse.x, mouse.y), camera)
 
             let intersects = []
             try {
@@ -223,6 +232,203 @@ export default {
             console.log('=== No valid selection ===')
             this.clearSelection()
             this.$emit('entity-selected', null)
+        },
+
+        onCanvasMouseDown(event) {
+            if (this.activeTool !== 'region' || !this.dxfViewer) return
+
+            this.isDragging = true
+            const rect = this.$refs.canvasContainer.getBoundingClientRect()
+            this.dragStart = {
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top
+            }
+            this.dragEnd = { ...this.dragStart }
+
+            this.clearSelection()
+        },
+
+        onCanvasMouseMove(event) {
+            if (!this.isDragging || this.activeTool !== 'region') return
+
+            const rect = this.$refs.canvasContainer.getBoundingClientRect()
+            this.dragEnd = {
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top
+            }
+
+            this.drawSelectionBox()
+        },
+
+        onCanvasMouseUp(event) {
+            if (!this.isDragging || this.activeTool !== 'region') return
+
+            this.isDragging = false
+            this.removeSelectionBox()
+
+            const rect = this.$refs.canvasContainer.getBoundingClientRect()
+            const dragEnd = {
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top
+            }
+
+            const dx = Math.abs(dragEnd.x - this.dragStart.x)
+            const dy = Math.abs(dragEnd.y - this.dragStart.y)
+
+            if (dx < 5 && dy < 5) {
+                this.$emit('entity-selected', null)
+                return
+            }
+
+            this.selectObjectsInBox(this.dragStart, dragEnd, rect)
+        },
+
+        drawSelectionBox() {
+            this.removeSelectionBox()
+
+            if (!this.$refs.canvasContainer) return
+
+            const box = document.createElement('div')
+            box.id = 'selection-box'
+            box.style.position = 'absolute'
+            box.style.border = '2px dashed #2196f3'
+            box.style.backgroundColor = 'rgba(33, 150, 243, 0.1)'
+            box.style.pointerEvents = 'none'
+            box.style.zIndex = '1000'
+
+            const minX = Math.min(this.dragStart.x, this.dragEnd.x)
+            const minY = Math.min(this.dragStart.y, this.dragEnd.y)
+            const width = Math.abs(this.dragEnd.x - this.dragStart.x)
+            const height = Math.abs(this.dragEnd.y - this.dragStart.y)
+
+            box.style.left = minX + 'px'
+            box.style.top = minY + 'px'
+            box.style.width = width + 'px'
+            box.style.height = height + 'px'
+
+            this.$refs.canvasContainer.appendChild(box)
+        },
+
+        removeSelectionBox() {
+            const box = document.getElementById('selection-box')
+            if (box) {
+                box.remove()
+            }
+        },
+
+        selectObjectsInBox(start, end, rect) {
+            const camera = this.dxfViewer.GetCamera()
+            const scene = this.dxfViewer.GetScene()
+
+            const minX = Math.min(start.x, end.x)
+            const maxX = Math.max(start.x, end.x)
+            const minY = Math.min(start.y, end.y)
+            const maxY = Math.max(start.y, end.y)
+
+            const minNDC = {
+                x: (minX / rect.width) * 2 - 1,
+                y: -(maxY / rect.height) * 2 + 1
+            }
+            const maxNDC = {
+                x: (maxX / rect.width) * 2 - 1,
+                y: -(minY / rect.height) * 2 + 1
+            }
+
+            const validObjects = this.getValidSceneObjects(scene)
+            const selectedObjects = []
+
+            for (const object of validObjects) {
+                if (!object.geometry || !object.geometry.attributes.position) continue
+
+                const positions = object.geometry.attributes.position.array
+                const numVertices = positions.length / 3
+
+                let inBox = false
+                for (let i = 0; i < numVertices; i++) {
+                    const vertex = new three.Vector3(
+                        positions[i * 3],
+                        positions[i * 3 + 1],
+                        positions[i * 3 + 2]
+                    )
+
+                    vertex.project(camera)
+
+                    if (vertex.x >= minNDC.x && vertex.x <= maxNDC.x &&
+                        vertex.y >= minNDC.y && vertex.y <= maxNDC.y) {
+                        inBox = true
+                        break
+                    }
+                }
+
+                if (inBox) {
+                    selectedObjects.push(object)
+                }
+            }
+
+            console.log('Objects in selection box:', selectedObjects.length)
+
+            if (selectedObjects.length > 0) {
+                const contour = this.extractContourFromObjects(selectedObjects)
+                if (contour) {
+                    this.clearSelection()
+                    for (const obj of selectedObjects) {
+                        this.highlightObject(obj)
+                    }
+                    this.selectedObject = selectedObjects
+                    this.$emit('entity-selected', contour)
+                }
+            } else {
+                this.$emit('entity-selected', null)
+            }
+        },
+
+        extractContourFromObjects(objects) {
+            const allPoints = []
+
+            for (const object of objects) {
+                if (!object.geometry || !object.geometry.attributes.position) continue
+
+                const positions = object.geometry.attributes.position.array
+                const numVertices = positions.length / 3
+
+                for (let i = 0; i < numVertices; i++) {
+                    allPoints.push({
+                        x: positions[i * 3],
+                        y: positions[i * 3 + 1],
+                        z: positions[i * 3 + 2]
+                    })
+                }
+            }
+
+            if (allPoints.length === 0) return null
+
+            const xCoords = allPoints.map(p => p.x)
+            const yCoords = allPoints.map(p => p.y)
+
+            const minX = Math.min(...xCoords)
+            const maxX = Math.max(...xCoords)
+            const minY = Math.min(...yCoords)
+            const maxY = Math.max(...yCoords)
+
+            const width = maxX - minX
+            const height = maxY - minY
+
+            if (width <= 0 || height <= 0) return null
+
+            return {
+                type: 'region',
+                width,
+                height,
+                area: width * height,
+                perimeter: 2 * (width + height),
+                center: {
+                    x: (minX + maxX) / 2,
+                    y: (minY + maxY) / 2
+                },
+                objectCount: objects.length,
+                layer: objects[0].userData?.layer || 'Multiple',
+                color: '#' + (objects[0].material?.color?.getHexString() || '000000')
+            }
         },
 
         matchesTool(entityType) {
@@ -374,22 +580,28 @@ export default {
         },
 
         clearSelection() {
+            this.removeSelectionBox()
+
             if (!this.selectedObject) return
 
-            try {
-                if (this.selectedObject.material) {
-                    if (this.selectedObject.userData?.originalColor) {
-                        this.selectedObject.material.color.copy(this.selectedObject.userData.originalColor)
-                        delete this.selectedObject.userData.originalColor
+            const objects = Array.isArray(this.selectedObject) ? this.selectedObject : [this.selectedObject]
+
+            for (const obj of objects) {
+                try {
+                    if (obj && obj.material) {
+                        if (obj.userData?.originalColor) {
+                            obj.material.color.copy(obj.userData.originalColor)
+                            delete obj.userData.originalColor
+                        }
+                        if (obj.userData?.originalLinewidth !== undefined) {
+                            obj.material.linewidth = obj.userData.originalLinewidth
+                            delete obj.userData.originalLinewidth
+                        }
+                        obj.material.needsUpdate = true
                     }
-                    if (this.selectedObject.userData?.originalLinewidth !== undefined) {
-                        this.selectedObject.material.linewidth = this.selectedObject.userData.originalLinewidth
-                        delete this.selectedObject.userData.originalLinewidth
-                    }
-                    this.selectedObject.material.needsUpdate = true
+                } catch (error) {
+                    console.warn('Error clearing selection:', error)
                 }
-            } catch (error) {
-                console.warn('Error clearing selection:', error)
             }
 
             this.selectedObject = null
