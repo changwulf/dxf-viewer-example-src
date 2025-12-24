@@ -143,6 +143,7 @@ export default {
 
             scene.traverse((object) => {
                 if (this.isValidGeometry(object)) {
+                    console.log('Valid object type:', object.type, 'name:', object.name, 'vertices:', object.geometry.attributes.position.count)
                     validObjects.push(object)
                 }
             })
@@ -161,12 +162,20 @@ export default {
 
             if (!this.raycaster) {
                 this.raycaster = new three.Raycaster()
-                this.raycaster.params.Line.threshold = 3
-                this.raycaster.params.Points.threshold = 3
             }
 
             const camera = this.dxfViewer.GetCamera()
             const scene = this.dxfViewer.GetScene()
+
+            // Calculate threshold based on camera distance
+            const cameraDistance = camera.position.length()
+            const threshold = cameraDistance * 0.01
+
+            this.raycaster.params.Line = { threshold }
+            this.raycaster.params.Line2 = { threshold }
+            this.raycaster.params.Points = { threshold }
+
+            console.log('Camera distance:', cameraDistance, 'Threshold:', threshold)
 
             const validObjects = this.getValidSceneObjects(scene)
             console.log('Valid objects in scene:', validObjects.length)
@@ -175,7 +184,7 @@ export default {
 
             let intersects = []
             try {
-                intersects = this.raycaster.intersectObjects(validObjects, false)
+                intersects = this.raycaster.intersectObjects(validObjects, true)
             } catch (error) {
                 console.warn('Raycaster error:', error)
                 return
