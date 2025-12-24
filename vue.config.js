@@ -8,7 +8,11 @@ module.exports = {
     ],
     devServer: {
         port: 9001,
-        host: '0.0.0.0'
+        host: '0.0.0.0',
+        allowedHosts: 'all',
+        client: {
+            webSocketURL: 'auto://0.0.0.0:0/ws'
+        }
     },
     configureWebpack: {
         plugins: [
