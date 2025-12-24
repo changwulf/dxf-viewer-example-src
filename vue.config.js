@@ -2,9 +2,7 @@ const { DefinePlugin } = require("webpack")
 const dxfViewerPackageJson = require("dxf-viewer/package.json")
 
 module.exports = {
-    publicPath: process.env.NODE_ENV === "production"
-        ? "/dxf-viewer-example/"
-        : "/",
+    publicPath: "/",
     transpileDependencies: [
         /[\\\/]node_modules[\\\/]dxf-viewer[\\\/]/
     ],
