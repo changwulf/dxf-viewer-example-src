@@ -153,6 +153,8 @@ export default {
         onCanvasClick(event) {
             if (this.activeTool === 'select' || !this.dxfViewer) return
 
+            console.log('=== Click detected with tool:', this.activeTool, '===')
+
             const rect = this.$refs.canvasContainer.getBoundingClientRect()
             const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
             const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
@@ -167,6 +169,7 @@ export default {
             const scene = this.dxfViewer.GetScene()
 
             const validObjects = this.getValidSceneObjects(scene)
+            console.log('Valid objects in scene:', validObjects.length)
 
             this.raycaster.setFromCamera(new three.Vector2(x, y), camera)
 
@@ -178,18 +181,29 @@ export default {
                 return
             }
 
+            console.log('Intersections found:', intersects.length)
+
             if (intersects.length > 0) {
-                for (const intersect of intersects) {
+                for (let i = 0; i < intersects.length; i++) {
+                    const intersect = intersects[i]
                     const object = intersect.object
+
+                    console.log(`--- Checking intersection ${i + 1}/${intersects.length} ---`)
 
                     try {
                         const dimensions = this.extractDimensions(object, intersect)
 
-                        if (dimensions && this.matchesTool(dimensions.type)) {
-                            this.clearSelection()
-                            this.highlightObject(object)
-                            this.$emit('entity-selected', dimensions)
-                            return
+                        if (dimensions) {
+                            console.log('Extracted dimensions:', dimensions)
+                            console.log('Tool matches:', this.matchesTool(dimensions.type))
+
+                            if (this.matchesTool(dimensions.type)) {
+                                this.clearSelection()
+                                this.highlightObject(object)
+                                this.$emit('entity-selected', dimensions)
+                                console.log('=== Selection successful ===')
+                                return
+                            }
                         }
                     } catch (error) {
                         console.warn('Error extracting dimensions:', error)
@@ -197,6 +211,7 @@ export default {
                 }
             }
 
+            console.log('=== No valid selection ===')
             this.clearSelection()
             this.$emit('entity-selected', null)
         },
@@ -209,15 +224,26 @@ export default {
         },
 
         extractDimensions(object, intersection) {
-            if (!object || !object.geometry) return null
+            if (!object || !object.geometry) {
+                console.log('No object or geometry')
+                return null
+            }
 
             const geometry = object.geometry
             const userData = object.userData || {}
 
-            if (!geometry.attributes || !geometry.attributes.position) return null
+            if (!geometry.attributes || !geometry.attributes.position) {
+                console.log('No position attribute')
+                return null
+            }
 
             const positions = geometry.attributes.position.array
-            if (!positions || positions.length === 0) return null
+            if (!positions || positions.length === 0) {
+                console.log('No positions or empty array')
+                return null
+            }
+
+            console.log('Processing object with', positions.length / 3, 'vertices')
 
             const numVertices = positions.length / 3
             const validPositions = []
@@ -225,14 +251,19 @@ export default {
             for (let i = 0; i < numVertices; i++) {
                 const x = positions[i * 3]
                 const y = positions[i * 3 + 1]
-                const z = positions[i * 3 + 2] || 0
+                const z = positions[i * 3 + 2]
 
                 if (isFinite(x) && isFinite(y) && isFinite(z)) {
                     validPositions.push({ x, y, z })
                 }
             }
 
-            if (validPositions.length === 0) return null
+            console.log('Valid positions:', validPositions.length, 'out of', numVertices)
+
+            if (validPositions.length === 0) {
+                console.log('No valid positions found')
+                return null
+            }
 
             if (validPositions.length === 2) {
                 const start = validPositions[0]
@@ -242,7 +273,9 @@ export default {
                 const dz = end.z - start.z
                 const length = Math.sqrt(dx * dx + dy * dy + dz * dz)
 
-                if (length > 0) {
+                console.log('Line detected - start:', start, 'end:', end, 'length:', length)
+
+                if (isFinite(length) && length > 0) {
                     return {
                         type: 'line',
                         start: { x: start.x, y: start.y },
@@ -267,13 +300,17 @@ export default {
             const centerX = (minX + maxX) / 2
             const centerY = (minY + maxY) / 2
 
+            console.log('Bounds - width:', width, 'height:', height, 'center:', centerX, centerY)
+
             if (!isFinite(width) || !isFinite(height) || width <= 0 || height <= 0) {
+                console.log('Invalid dimensions')
                 return null
             }
 
             if (Math.abs(width - height) / Math.max(width, height) < 0.1) {
                 const radius = (width + height) / 4
-                if (radius > 0) {
+                console.log('Circle detected - radius:', radius)
+                if (isFinite(radius) && radius > 0) {
                     return {
                         type: 'circle',
                         center: { x: centerX, y: centerY },
@@ -288,6 +325,7 @@ export default {
             }
 
             if (width > 0 && height > 0 && validPositions.length >= 4) {
+                console.log('Region detected')
                 return {
                     type: 'region',
                     width,
@@ -300,6 +338,7 @@ export default {
                 }
             }
 
+            console.log('No match for any entity type')
             return null
         },
 
