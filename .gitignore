@@ -90,3 +90,4 @@ fabric.properties
 node_modules/
 dist/
 .history/
+.env
