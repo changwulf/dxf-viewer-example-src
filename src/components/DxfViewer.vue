@@ -131,7 +131,8 @@ export default {
 
             if (!this.raycaster) {
                 this.raycaster = new three.Raycaster()
-                this.raycaster.params.Line.threshold = 0.5
+                this.raycaster.params.Line.threshold = 2
+                this.raycaster.params.Points.threshold = 2
             }
 
             const camera = this.dxfViewer.GetCamera()
@@ -141,14 +142,24 @@ export default {
             const intersects = this.raycaster.intersectObjects(scene.children, true)
 
             if (intersects.length > 0) {
-                this.clearSelection()
-                const object = intersects[0].object
-                const dimensions = this.extractDimensions(object, intersects[0])
+                for (const intersect of intersects) {
+                    this.clearSelection()
+                    const object = intersect.object
 
-                if (dimensions && this.matchesTool(dimensions.type)) {
-                    this.highlightObject(object)
-                    this.$emit('entity-selected', dimensions)
+                    try {
+                        const dimensions = this.extractDimensions(object, intersect)
+
+                        if (dimensions && this.matchesTool(dimensions.type)) {
+                            this.highlightObject(object)
+                            this.$emit('entity-selected', dimensions)
+                            return
+                        }
+                    } catch (error) {
+                        console.warn('Error extracting dimensions:', error)
+                    }
                 }
+                this.clearSelection()
+                this.$emit('entity-selected', null)
             } else {
                 this.clearSelection()
                 this.$emit('entity-selected', null)
@@ -163,49 +174,71 @@ export default {
         },
 
         extractDimensions(object, intersection) {
+            if (!object || !object.geometry) return null
+
             const geometry = object.geometry
+            const userData = object.userData || {}
 
-            if (geometry.type === 'BufferGeometry' && geometry.attributes.position) {
-                const positions = geometry.attributes.position.array
+            if (!geometry.attributes || !geometry.attributes.position) return null
 
-                if (geometry.index === null && positions.length === 6) {
-                    const start = {
-                        x: positions[0],
-                        y: positions[1],
-                        z: positions[2] || 0
-                    }
-                    const end = {
-                        x: positions[3],
-                        y: positions[4],
-                        z: positions[5] || 0
-                    }
-                    const dx = end.x - start.x
-                    const dy = end.y - start.y
-                    const dz = (end.z || 0) - (start.z || 0)
-                    const length = Math.sqrt(dx * dx + dy * dy + dz * dz)
+            const positions = geometry.attributes.position.array
+            if (!positions || positions.length === 0) return null
 
+            const numVertices = positions.length / 3
+            const validPositions = []
+
+            for (let i = 0; i < numVertices; i++) {
+                const x = positions[i * 3]
+                const y = positions[i * 3 + 1]
+                const z = positions[i * 3 + 2] || 0
+
+                if (isFinite(x) && isFinite(y) && isFinite(z)) {
+                    validPositions.push({ x, y, z })
+                }
+            }
+
+            if (validPositions.length === 0) return null
+
+            if (validPositions.length === 2) {
+                const start = validPositions[0]
+                const end = validPositions[1]
+                const dx = end.x - start.x
+                const dy = end.y - start.y
+                const dz = end.z - start.z
+                const length = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+                if (length > 0) {
                     return {
                         type: 'line',
-                        start,
-                        end,
+                        start: { x: start.x, y: start.y },
+                        end: { x: end.x, y: end.y },
                         length,
-                        layer: object.userData?.layer || 'Unknown',
+                        layer: userData.layer || 'Unknown',
                         color: '#' + (object.material?.color?.getHexString() || '000000')
                     }
                 }
+            }
 
-                const minX = Math.min(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3]))
-                const maxX = Math.max(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3]))
-                const minY = Math.min(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3 + 1]))
-                const maxY = Math.max(...Array.from({length: positions.length / 3}, (_, i) => positions[i * 3 + 1]))
+            const xCoords = validPositions.map(p => p.x)
+            const yCoords = validPositions.map(p => p.y)
 
-                const width = maxX - minX
-                const height = maxY - minY
-                const centerX = (minX + maxX) / 2
-                const centerY = (minY + maxY) / 2
+            const minX = Math.min(...xCoords)
+            const maxX = Math.max(...xCoords)
+            const minY = Math.min(...yCoords)
+            const maxY = Math.max(...yCoords)
 
-                if (width > 0 && height > 0 && Math.abs(width - height) < 0.01) {
-                    const radius = width / 2
+            const width = maxX - minX
+            const height = maxY - minY
+            const centerX = (minX + maxX) / 2
+            const centerY = (minY + maxY) / 2
+
+            if (!isFinite(width) || !isFinite(height) || width <= 0 || height <= 0) {
+                return null
+            }
+
+            if (Math.abs(width - height) / Math.max(width, height) < 0.1) {
+                const radius = (width + height) / 4
+                if (radius > 0) {
                     return {
                         type: 'circle',
                         center: { x: centerX, y: centerY },
@@ -213,22 +246,22 @@ export default {
                         diameter: radius * 2,
                         circumference: 2 * Math.PI * radius,
                         area: Math.PI * radius * radius,
-                        layer: object.userData?.layer || 'Unknown',
+                        layer: userData.layer || 'Unknown',
                         color: '#' + (object.material?.color?.getHexString() || '000000')
                     }
                 }
+            }
 
-                if (width > 0 && height > 0) {
-                    return {
-                        type: 'region',
-                        width,
-                        height,
-                        area: width * height,
-                        perimeter: 2 * (width + height),
-                        center: { x: centerX, y: centerY },
-                        layer: object.userData?.layer || 'Unknown',
-                        color: '#' + (object.material?.color?.getHexString() || '000000')
-                    }
+            if (width > 0 && height > 0 && validPositions.length >= 4) {
+                return {
+                    type: 'region',
+                    width,
+                    height,
+                    area: width * height,
+                    perimeter: 2 * (width + height),
+                    center: { x: centerX, y: centerY },
+                    layer: userData.layer || 'Unknown',
+                    color: '#' + (object.material?.color?.getHexString() || '000000')
                 }
             }
 
@@ -236,26 +269,46 @@ export default {
         },
 
         highlightObject(object) {
+            if (!object || !object.material) return
+
             this.selectedObject = object
-            if (object.material) {
+
+            if (!object.userData) {
+                object.userData = {}
+            }
+
+            if (object.material.color) {
                 object.userData.originalColor = object.material.color.clone()
                 object.material.color.set(0xff6600)
-                if (object.material.linewidth !== undefined) {
-                    object.userData.originalLinewidth = object.material.linewidth
-                    object.material.linewidth = 3
-                }
+                object.material.needsUpdate = true
+            }
+
+            if (object.material.linewidth !== undefined) {
+                object.userData.originalLinewidth = object.material.linewidth
+                object.material.linewidth = 3
+                object.material.needsUpdate = true
             }
         },
 
         clearSelection() {
-            if (this.selectedObject && this.selectedObject.material) {
-                if (this.selectedObject.userData.originalColor) {
-                    this.selectedObject.material.color.copy(this.selectedObject.userData.originalColor)
+            if (!this.selectedObject) return
+
+            try {
+                if (this.selectedObject.material) {
+                    if (this.selectedObject.userData?.originalColor) {
+                        this.selectedObject.material.color.copy(this.selectedObject.userData.originalColor)
+                        delete this.selectedObject.userData.originalColor
+                    }
+                    if (this.selectedObject.userData?.originalLinewidth !== undefined) {
+                        this.selectedObject.material.linewidth = this.selectedObject.userData.originalLinewidth
+                        delete this.selectedObject.userData.originalLinewidth
+                    }
+                    this.selectedObject.material.needsUpdate = true
                 }
-                if (this.selectedObject.userData.originalLinewidth !== undefined) {
-                    this.selectedObject.material.linewidth = this.selectedObject.userData.originalLinewidth
-                }
+            } catch (error) {
+                console.warn('Error clearing selection:', error)
             }
+
             this.selectedObject = null
         }
     },
